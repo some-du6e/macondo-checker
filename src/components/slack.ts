@@ -18,29 +18,9 @@ app.message("hello", async ({ message, say }) => {
   // say() sends a message to the channel where the event was triggered
   if (!("user" in message)) return
   await say({
-    blocks: [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `Hey there <@${message.user}>!`,
-        },
-        accessory: {
-          type: "button",
-          text: {
-            type: "plain_text",
-            text: "Click Me",
-          },
-          action_id: "button_click",
-        },
-      },
-    ],
-    text: `Hey there <@${message.user}>!`,
+    text: `bye <@${message.user}>!`,
   })
 })
-;(async () => {
-  // Start your app
-  await app.start(process.env.PORT || 3000)
 
-  app.logger.info("⚡️ Bolt app is running!")
-})()
+
+export { app }

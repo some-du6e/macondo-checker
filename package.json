@@ -10,7 +10,8 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@slack/bolt": "^4.7.3"
+    "@slack/bolt": "^4.7.3",
+    "zod": "^4.4.3"
   },
   "scripts": {
     "dev": "bun run src/index.ts",

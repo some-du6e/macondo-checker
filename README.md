@@ -1,5 +1,7 @@
 # macondo-checker
 
+## running
+
 To install dependencies:
 
 ```bash
@@ -12,4 +14,9 @@ To run:
 bun run index.ts
 ```
 
-This project was created using `bun init` in bun v1.3.14. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+## possible stack
+- pi 
+    - for the agent cuz i dont want to write an entire agent thing and also its light asl
+- e2b
+    - for making the agent check the projetc inside without fucking up my machine
+    - maybe use this https://pi.dev/packages/pi-extension-e2b

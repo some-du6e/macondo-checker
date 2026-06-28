@@ -1,5 +1,5 @@
 import { App } from "@slack/bolt"
-import { session } from "../pi/pi"
+import { handleNewMessage } from "../pi/slackIntegration"
 /**
  * This sample Slack application uses Socket Mode.
  * For the companion getting started setup guide, see:
@@ -13,7 +13,7 @@ const app = new App({
     appToken: process.env.SLACK_APP_TOKEN,
 })
 
-function sendMdMessageInThread(originalMessageTs: string, markdownMessage: string, app: App) {
+export function sendMdMessageInThread(originalMessageTs: string, markdownMessage: string, app: App) {
     app.client.chat.postMessage({
         channel: process.env.SLACK_CHANNEL_ID || "C0BDBR2MEPM",
         blocks: [
@@ -32,29 +32,13 @@ function sendMdMessageInThread(originalMessageTs: string, markdownMessage: strin
 // Listens to incoming messages that contain "hello"
 app.message(async ({ message, say }) => {
     // say() sends a message to the channel where the event was triggered
-    if (!("user" in message)) return
+    const slackMessage = message as any
+    if (!("user" in slackMessage)) return
+    if (slackMessage.bot_id || slackMessage.subtype === "bot_message") return
+    if (!slackMessage.text) return
 
-    let threadts = message.ts
-    await sendMdMessageInThread(
-        threadts,
-        `fuck you
-    # fuck you
-    ## fuck you`,
-        app,
-    )
-
-    if (!message.text) return
-
-    await session.prompt(message.text)
-
-    let piMessage = await session.messages.at(-1)
-    if (!piMessage || !("content" in piMessage) || !piMessage.content) return
-
-    const text = typeof piMessage.content === "string"
-        ? piMessage.content
-        : (piMessage.content.find((c: any) => c.type === "text") as any)?.text ?? ""
-
-    sendMdMessageInThread(threadts, text, app)
+    const threadTs = slackMessage.thread_ts || slackMessage.ts
+    await handleNewMessage(threadTs, slackMessage.text, app)
 })
 
 export { app }

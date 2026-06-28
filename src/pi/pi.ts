@@ -1,25 +1,49 @@
-import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "@earendil-works/pi-coding-agent";
-import { createModels } from "@earendil-works/pi-ai";
+import {
+    AgentSession,
+    AuthStorage,
+    createAgentSession,
+    ModelRegistry,
+    SessionManager,
+} from "@earendil-works/pi-coding-agent"
+import { createModels } from "@earendil-works/pi-ai"
 // Set up credential storage and model registry
-const authStorage = AuthStorage.create();
-const modelRegistry = ModelRegistry.create(authStorage);
-const models = createModels({});
+const authStorage = AuthStorage.create()
+const modelRegistry = ModelRegistry.create(authStorage)
+const models = createModels({})
+const sessions = new Map<string, Promise<AgentSession>>()
 
-const { session } = await createAgentSession({
-  sessionManager: SessionManager.inMemory(),
-  authStorage,
-  modelRegistry,
-});
+function threadSessionDir(threadTs: string) {
+    return `threads/${threadTs.replace(/[^a-zA-Z0-9._-]/g, "_")}`
+}
 
-// Find model from registry (doesn't check if API key exists)
-const model = modelRegistry.find("openrouter", "minimax/minimax-m2.7");
-if (!model) throw new Error("Model not found");
-session.setModel(model);
+async function createOrResumeThreadSession(threadTs: string) {
+    let manager = SessionManager.continueRecent(process.cwd(), threadSessionDir(threadTs))
 
-session.subscribe((event : any) => {
-  if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-    process.stdout.write(event.assistantMessageEvent.delta);
-  }
-});
+    const { session } = await createAgentSession({
+        sessionManager: manager,
+        authStorage,
+        modelRegistry,
+    })
 
-export {session}
+    return session
+}
+
+export async function getSession(threadTs: string) {
+    let existingSession = sessions.get(threadTs)
+    if (existingSession) return existingSession
+
+    const sessionPromise = createOrResumeThreadSession(threadTs).then((session) => {
+        const model = modelRegistry.find("openrouter", "minimax/minimax-m2.7")
+        if (!model) throw new Error("Model not found")
+        session.setModel(model)
+
+        return session
+    })
+
+    sessions.set(threadTs, sessionPromise)
+    sessionPromise.catch(() => sessions.delete(threadTs))
+
+    return sessionPromise
+}
+
+

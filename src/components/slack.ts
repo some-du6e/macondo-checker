@@ -30,7 +30,7 @@ export function sendMdMessageInThread(originalMessageTs: string, markdownMessage
 }
 
 // Listens to incoming messages that contain "hello"
-app.message(async ({ message, say }) => {
+app.message(async ({ message, context, body }) => {
     // say() sends a message to the channel where the event was triggered
     const slackMessage = message as any
     if (!("user" in slackMessage)) return
@@ -38,7 +38,11 @@ app.message(async ({ message, say }) => {
     if (!slackMessage.text) return
 
     const threadTs = slackMessage.thread_ts || slackMessage.ts
-    await handleNewMessage(threadTs, slackMessage.text, app)
+    await handleNewMessage(threadTs, slackMessage.text, app, {
+        channel: slackMessage.channel,
+        recipientTeamId: context.teamId || slackMessage.team || (body as any).team_id || (body as any).team?.id,
+        recipientUserId: slackMessage.user,
+    })
 })
 
 export { app }

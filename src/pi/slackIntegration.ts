@@ -3,6 +3,7 @@ import type { App } from "@slack/bolt"
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent"
 
 const SLACK_CHANNEL_ID = process.env.SLACK_CHANNEL_ID || "C0BDBR2MEPM"
+const SLACK_TASK_TEXT_LIMIT = 256
 
 export interface SlackReplyTarget {
     channel?: string
@@ -30,6 +31,58 @@ async function sendMdMessageInThread(threadTs: string, markdownMessage: string, 
     })
 }
 
+type SlackTaskStatus = "pending" | "in_progress" | "complete" | "error"
+
+interface SlackTaskUpdateChunk {
+    type: "task_update"
+    id: string
+    title: string
+    status: SlackTaskStatus
+    details?: string
+    output?: string
+}
+
+function truncateTaskText(text: string) {
+    const normalized = text
+        .split("\n")
+        .map((line) => line.replace(/[ \t]+/g, " ").trim())
+        .filter(Boolean)
+        .join("\n")
+    if (normalized.length <= SLACK_TASK_TEXT_LIMIT) return normalized
+    return `${normalized.slice(0, SLACK_TASK_TEXT_LIMIT - 3)}...`
+}
+
+function stringifyForSlack(value: unknown) {
+    if (typeof value === "string") return value
+    if (value && typeof value === "object" && "content" in value && Array.isArray(value.content)) {
+        const text = value.content
+            .filter((content: any) => content.type === "text")
+            .map((content: any) => content.text)
+            .join(" ")
+            .trim()
+        if (text) return text
+    }
+
+    try {
+        return JSON.stringify(value)
+    } catch {
+        return String(value)
+    }
+}
+
+function formatToolInput(toolName: string, args: unknown) {
+    if (args && typeof args === "object" && "command" in args && typeof args.command === "string") {
+        return `Command\n${args.command}`
+    }
+
+    return `${toolName} input\n${stringifyForSlack(args)}`
+}
+
+function formatToolOutput(toolName: string, value: unknown) {
+    const output = stringifyForSlack(value)
+    return `${toolName} output\n${output}`
+}
+
 async function streamPromptToSlack(
     threadTs: string,
     session: AgentSession,
@@ -43,27 +96,154 @@ async function streamPromptToSlack(
         recipient_team_id: target.recipientTeamId,
         recipient_user_id: target.recipientUserId,
         buffer_size: 128,
+        task_display_mode: "plan",
     })
 
     let sawTextDelta = false
+    let usedStream = false
     let appendPromise = Promise.resolve()
+    let turnIndex = 0
+    const thinkingBuffers = new Map<string, string>()
+    const thinkingTaskIds = new Map<string, string>()
+    let claimedInitialThinkingTask = false
+    let resolvedInitialThinkingTask = false
+
+    const appendToStream = (args: Parameters<typeof streamer.append>[0]) => {
+        usedStream = true
+        appendPromise = appendPromise.then(async () => {
+            await streamer.append(args)
+        })
+    }
+
+    const appendTaskUpdate = (chunk: SlackTaskUpdateChunk) => {
+        appendToStream({
+            chunks: [
+                {
+                    ...chunk,
+                    title: truncateTaskText(chunk.title),
+                    details: chunk.details ? truncateTaskText(chunk.details) : undefined,
+                    output: chunk.output ? truncateTaskText(chunk.output) : undefined,
+                },
+            ],
+        })
+    }
 
     const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-        if (event.type !== "message_update" || event.assistantMessageEvent.type !== "text_delta") return
+        if (event.type === "turn_start") {
+            turnIndex += 1
+            return
+        }
+
+        if (event.type === "tool_execution_start") {
+            appendTaskUpdate({
+                type: "task_update",
+                id: `execution-${event.toolCallId}`,
+                title: `Run ${event.toolName}`,
+                status: "in_progress",
+                details: formatToolInput(event.toolName, event.args),
+            })
+            return
+        }
+
+        if (event.type === "tool_execution_update") {
+            appendTaskUpdate({
+                type: "task_update",
+                id: `execution-${event.toolCallId}`,
+                title: `Run ${event.toolName}`,
+                status: "in_progress",
+                output: formatToolOutput(event.toolName, event.partialResult),
+            })
+            return
+        }
+
+        if (event.type === "tool_execution_end") {
+            appendTaskUpdate({
+                type: "task_update",
+                id: `execution-${event.toolCallId}`,
+                title: `Run ${event.toolName}`,
+                status: event.isError ? "error" : "complete",
+                output: formatToolOutput(event.toolName, event.result),
+            })
+            return
+        }
+
+        if (event.type !== "message_update") return
+
+        if (event.assistantMessageEvent.type === "thinking_start") {
+            const key = `${turnIndex}-${event.assistantMessageEvent.contentIndex}`
+            const id = claimedInitialThinkingTask ? `thinking-${key}` : "thinking-current"
+            claimedInitialThinkingTask = true
+            thinkingTaskIds.set(key, id)
+            thinkingBuffers.set(id, "")
+            return
+        }
+
+        if (event.assistantMessageEvent.type === "thinking_delta") {
+            const key = `${turnIndex}-${event.assistantMessageEvent.contentIndex}`
+            const id = thinkingTaskIds.get(key) || `thinking-${key}`
+            thinkingBuffers.set(id, `${thinkingBuffers.get(id) || ""}${event.assistantMessageEvent.delta}`)
+            return
+        }
+
+        if (event.assistantMessageEvent.type === "thinking_end") {
+            const key = `${turnIndex}-${event.assistantMessageEvent.contentIndex}`
+            const id = thinkingTaskIds.get(key) || `thinking-${key}`
+            const thinking = event.assistantMessageEvent.content || thinkingBuffers.get(id) || ""
+            appendTaskUpdate({
+                type: "task_update",
+                id,
+                title: "Reasoning",
+                status: "complete",
+                output: thinking,
+            })
+            if (id === "thinking-current") resolvedInitialThinkingTask = true
+            thinkingTaskIds.delete(key)
+            thinkingBuffers.delete(id)
+            return
+        }
+
+        if (event.assistantMessageEvent.type === "toolcall_start") {
+            appendTaskUpdate({
+                type: "task_update",
+                id: `input-${turnIndex}-${event.assistantMessageEvent.contentIndex}`,
+                title: "Tool input",
+                status: "in_progress",
+                details: "Preparing tool arguments.",
+            })
+            return
+        }
+
+        if (event.assistantMessageEvent.type === "toolcall_end") {
+            appendTaskUpdate({
+                type: "task_update",
+                id: `input-${turnIndex}-${event.assistantMessageEvent.contentIndex}`,
+                title: `${event.assistantMessageEvent.toolCall.name} input`,
+                status: "complete",
+                details: formatToolInput(event.assistantMessageEvent.toolCall.name, event.assistantMessageEvent.toolCall.arguments),
+            })
+            return
+        }
+
+        if (event.assistantMessageEvent.type !== "text_delta") return
 
         const delta = event.assistantMessageEvent.delta
         if (!delta) return
 
         sawTextDelta = true
-        appendPromise = appendPromise.then(async () => {
-            await streamer.append({ markdown_text: delta })
-        })
+        appendToStream({ markdown_text: delta })
     })
 
     let promptError: unknown
 
     try {
         try {
+            appendTaskUpdate({
+                type: "task_update",
+                id: "thinking-current",
+                title: "Reasoning",
+                status: "in_progress",
+                details: "Thinking through the request.",
+            })
             await prompt()
         } catch (error) {
             promptError = error
@@ -71,7 +251,18 @@ async function streamPromptToSlack(
 
         await appendPromise
 
-        if (sawTextDelta) {
+        if (usedStream && !resolvedInitialThinkingTask) {
+            appendTaskUpdate({
+                type: "task_update",
+                id: "thinking-current",
+                title: "Reasoning",
+                status: promptError ? "error" : "complete",
+                details: promptError ? "The run ended before reasoning finished." : "Reasoning stream finished.",
+            })
+            await appendPromise
+        }
+
+        if (usedStream) {
             await streamer.stop()
         }
 

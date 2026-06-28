@@ -1,0 +1,3 @@
+- [] e2b sandbox
+- [] integrate with macondo
+- [] blockkit thinking steps with tools and stuff

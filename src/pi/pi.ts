@@ -46,7 +46,7 @@ async function getResourceLoader() {
             agentDir: getAgentDir(),
             appendSystemPromptOverride: (base) => [
                 ...base,
-                `## Slack Instructions\n${extraInstructions.map((instruction) => `- ${instruction}`).join("\n")}`,
+                `## Extra Instructions\n${extraInstructions.map((instruction) => `- ${instruction}`).join("\n")}`,
             ],
         })
 

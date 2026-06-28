@@ -28,6 +28,8 @@ function getTextContent(message: any) {
 }
 
 export async function handleNewMessage(threadTs: string, message: string, app: App) {
+    if (message.trim().startsWith("##")) return // ignore it like the gork(ie) bots
+
     let session = await getSession(threadTs)
 
     await session.prompt(message)

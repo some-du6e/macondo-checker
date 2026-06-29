@@ -12,6 +12,7 @@ const SLACK_TASK_TEXT_LIMIT = 256;
 const THINKING_FLUSH_INTERVAL_MS = 500;
 const THINKING_FLUSH_CHARS = 160;
 const THINKING_PROGRESS_PREVIEW_CHARS = 120;
+const routedThreads = new Set<string>();
 
 export interface SlackReplyTarget {
     channel?: string;
@@ -45,6 +46,23 @@ async function sendMdMessageInThread(
         icon_url: agent?.pfp,
         username: agent?.name,
     });
+}
+
+async function sendSubagentRoutingMessage(
+    threadTs: string,
+    app: App,
+    target: SlackReplyTarget,
+    agent: subagent,
+) {
+    if (routedThreads.has(threadTs)) return;
+    routedThreads.add(threadTs);
+
+    await sendMdMessageInThread(
+        threadTs,
+        `I'm going to route you to *${agent.name}*.`,
+        app,
+        target,
+    );
 }
 
 type SlackTaskStatus = "pending" | "in_progress" | "complete" | "error";
@@ -127,6 +145,7 @@ async function streamPromptToSlack(
     prompt: () => Promise<void>,
     app: App,
     target: SlackReplyTarget,
+    agent: subagent,
 ) {
     const streamer = app.client.chatStream({
         channel: getSlackChannel(target),
@@ -135,6 +154,8 @@ async function streamPromptToSlack(
         recipient_user_id: target.recipientUserId,
         buffer_size: 128,
         task_display_mode: "plan",
+        icon_url: agent.pfp,
+        username: agent.name,
     });
 
     let sawTextDelta = false;
@@ -143,7 +164,6 @@ async function streamPromptToSlack(
     let turnIndex = 0;
     const thinkingBuffers = new Map<string, string>();
     const thinkingTaskIds = new Map<string, string>();
-    const thinkingProgressIds = new Map<string, string>();
     const thinkingLastFlushAt = new Map<string, number>();
     const thinkingLastFlushLength = new Map<string, number>();
     const completedTaskIds = new Set<string>();
@@ -195,15 +215,9 @@ async function streamPromptToSlack(
             thinking.length - lastFlushLength >= THINKING_FLUSH_CHARS;
         if (!force && !enoughTimePassed && !enoughTextArrived) return;
 
-        const progressId =
-            thinkingProgressIds.get(id) ||
-            `${id}-progress-${thinkingLastFlushLength.size}`;
-        thinkingProgressIds.set(id, progressId);
         appendTaskUpdate({
             type: "task_update",
-            id: force
-                ? `${id}-final`
-                : `${progressId}-${thinkingLastFlushLength.get(id) || 0}`,
+            id,
             title: force ? "Reasoning" : "Thinking",
             status,
             output: force
@@ -223,7 +237,7 @@ async function streamPromptToSlack(
         if (event.type === "tool_execution_start") {
             appendTaskUpdate({
                 type: "task_update",
-                id: `execution-${event.toolCallId}-start`,
+                id: `execution-${event.toolCallId}`,
                 title: `Run ${event.toolName}`,
                 status: "in_progress",
                 details: "Executing tool.",
@@ -238,7 +252,7 @@ async function streamPromptToSlack(
         if (event.type === "tool_execution_end") {
             appendTaskUpdate({
                 type: "task_update",
-                id: `execution-${event.toolCallId}-end`,
+                id: `execution-${event.toolCallId}`,
                 title: `Finished ${event.toolName}`,
                 status: event.isError ? "error" : "complete",
                 output: formatToolOutput(event.toolName, event.result),
@@ -282,7 +296,6 @@ async function streamPromptToSlack(
             if (id === "thinking-current") resolvedInitialThinkingTask = true;
             thinkingTaskIds.delete(key);
             thinkingBuffers.delete(id);
-            thinkingProgressIds.delete(id);
             thinkingLastFlushAt.delete(id);
             thinkingLastFlushLength.delete(id);
             return;
@@ -291,7 +304,7 @@ async function streamPromptToSlack(
         if (event.assistantMessageEvent.type === "toolcall_start") {
             appendTaskUpdate({
                 type: "task_update",
-                id: `input-${turnIndex}-${event.assistantMessageEvent.contentIndex}-pending`,
+                id: `input-${turnIndex}-${event.assistantMessageEvent.contentIndex}`,
                 title: "Tool input",
                 status: "in_progress",
                 details: "Preparing tool arguments.",
@@ -302,7 +315,7 @@ async function streamPromptToSlack(
         if (event.assistantMessageEvent.type === "toolcall_end") {
             appendTaskUpdate({
                 type: "task_update",
-                id: `input-${turnIndex}-${event.assistantMessageEvent.contentIndex}-final`,
+                id: `input-${turnIndex}-${event.assistantMessageEvent.contentIndex}`,
                 title: `${event.assistantMessageEvent.toolCall.name} input`,
                 status: "complete",
                 details: formatToolInput(
@@ -328,7 +341,7 @@ async function streamPromptToSlack(
         try {
             appendTaskUpdate({
                 type: "task_update",
-                id: "thinking-current-start",
+                id: "thinking-current",
                 title: "Reasoning",
                 status: "in_progress",
                 details: "Thinking through the request.",
@@ -343,7 +356,7 @@ async function streamPromptToSlack(
         if (usedStream && !resolvedInitialThinkingTask) {
             appendTaskUpdate({
                 type: "task_update",
-                id: "thinking-current-fallback",
+                id: "thinking-current",
                 title: "Reasoning",
                 status: promptError ? "error" : "complete",
                 details: promptError
@@ -384,6 +397,7 @@ export async function handleNewMessage(
     if (message.trim().startsWith("##")) return; // ignore it like the gork(ie) bots
 
     const { session, agent } = await getSession(threadTs);
+    await sendSubagentRoutingMessage(threadTs, app, target, agent);
 
     const streamed = await streamPromptToSlack(
         threadTs,
@@ -391,6 +405,7 @@ export async function handleNewMessage(
         () => session.prompt(message),
         app,
         target,
+        agent,
     );
 
     const piMessage = session.state.messages

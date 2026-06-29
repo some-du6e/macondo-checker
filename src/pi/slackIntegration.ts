@@ -1,9 +1,11 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { getSession } from "./pi";
 import type { App } from "@slack/bolt";
 import type {
     AgentSession,
     AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
+import { subagent } from "../slack/subagents";
 
 const SLACK_CHANNEL_ID = process.env.SLACK_CHANNEL_ID || "C0BDBR2MEPM";
 const SLACK_TASK_TEXT_LIMIT = 256;
@@ -26,6 +28,7 @@ async function sendMdMessageInThread(
     markdownMessage: string,
     app: App,
     target: SlackReplyTarget,
+    agent?: subagent,
 ) {
     await app.client.chat.postMessage({
         channel: getSlackChannel(target),
@@ -39,6 +42,8 @@ async function sendMdMessageInThread(
             },
         ],
         thread_ts: threadTs.toString(),
+        icon_url: agent?.pfp,
+        username: agent?.name,
     });
 }
 
@@ -378,7 +383,7 @@ export async function handleNewMessage(
 ) {
     if (message.trim().startsWith("##")) return; // ignore it like the gork(ie) bots
 
-    let session = await getSession(threadTs);
+    const { session, agent } = await getSession(threadTs);
 
     const streamed = await streamPromptToSlack(
         threadTs,
@@ -388,7 +393,7 @@ export async function handleNewMessage(
         target,
     );
 
-    let piMessage = session.state.messages
+    const piMessage = session.state.messages
         .slice()
         .reverse()
         .find((message: any) => message.role === "assistant");
@@ -397,5 +402,6 @@ export async function handleNewMessage(
     const text = getTextContent(piMessage);
     if (!text) return;
 
-    if (!streamed) await sendMdMessageInThread(threadTs, text, app, target);
+    if (!streamed)
+        await sendMdMessageInThread(threadTs, text, app, target, agent);
 }

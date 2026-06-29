@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { App } from "@slack/bolt";
 import { handleNewMessage } from "../pi/slackIntegration";
 /**
@@ -12,26 +13,6 @@ const app = new App({
     socketMode: true,
     appToken: process.env.SLACK_APP_TOKEN,
 });
-
-export function sendMdMessageInThread(
-    originalMessageTs: string,
-    markdownMessage: string,
-    app: App,
-) {
-    app.client.chat.postMessage({
-        channel: process.env.SLACK_CHANNEL_ID || "C0BDBR2MEPM",
-        blocks: [
-            {
-                type: "section",
-                text: {
-                    type: "mrkdwn",
-                    text: markdownMessage,
-                },
-            },
-        ],
-        thread_ts: originalMessageTs.toString(),
-    });
-}
 
 // Listens to incoming messages that contain "hello"
 app.message(async ({ message, context, body }) => {
@@ -48,7 +29,7 @@ app.message(async ({ message, context, body }) => {
             context.teamId ||
             slackMessage.team ||
             (body as any).team_id ||
-            (body as any).team?.id,
+            (body as any).team?.id, // ts-ignore
         recipientUserId: slackMessage.user,
     });
 });

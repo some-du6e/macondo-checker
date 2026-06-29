@@ -4,7 +4,14 @@
   "type": "module",
   "private": true,
   "devDependencies": {
-    "@types/bun": "latest"
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "latest",
+    "eslint": "^10.6.0",
+    "globals": "^17.7.0",
+    "husky": "^9.1.7",
+    "jiti": "^2.7.0",
+    "prettier": "^3.9.1",
+    "typescript-eslint": "^8.62.0"
   },
   "peerDependencies": {
     "typescript": "^5"
@@ -15,7 +22,9 @@
     "zod": "^4.4.3"
   },
   "scripts": {
+    "check": "bunx tsc --noEmit",
     "dev": "bun run src/index.ts",
-    "start": "bun run src/index.ts"
+    "start": "bun run src/index.ts",
+    "prepare": "husky"
   }
 }

@@ -4,6 +4,9 @@ import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-
 
 const SLACK_CHANNEL_ID = process.env.SLACK_CHANNEL_ID || "C0BDBR2MEPM"
 const SLACK_TASK_TEXT_LIMIT = 256
+const THINKING_FLUSH_INTERVAL_MS = 500
+const THINKING_FLUSH_CHARS = 160
+const THINKING_PROGRESS_PREVIEW_CHARS = 120
 
 export interface SlackReplyTarget {
     channel?: string
@@ -83,6 +86,18 @@ function formatToolOutput(toolName: string, value: unknown) {
     return `${toolName} output\n${output}`
 }
 
+function getThinkingPreview(thinking: string) {
+    return truncateTaskText(thinking)
+}
+
+function getThinkingProgressPreview(thinking: string) {
+    const preview =
+        thinking.length <= THINKING_PROGRESS_PREVIEW_CHARS
+            ? thinking
+            : `...${thinking.slice(thinking.length - THINKING_PROGRESS_PREVIEW_CHARS)}`
+    return truncateTaskText(preview)
+}
+
 async function streamPromptToSlack(
     threadTs: string,
     session: AgentSession,
@@ -105,6 +120,10 @@ async function streamPromptToSlack(
     let turnIndex = 0
     const thinkingBuffers = new Map<string, string>()
     const thinkingTaskIds = new Map<string, string>()
+    const thinkingProgressIds = new Map<string, string>()
+    const thinkingLastFlushAt = new Map<string, number>()
+    const thinkingLastFlushLength = new Map<string, number>()
+    const completedTaskIds = new Set<string>()
     let claimedInitialThinkingTask = false
     let resolvedInitialThinkingTask = false
 
@@ -116,6 +135,9 @@ async function streamPromptToSlack(
     }
 
     const appendTaskUpdate = (chunk: SlackTaskUpdateChunk) => {
+        if (completedTaskIds.has(chunk.id)) return
+        if (chunk.status === "complete" || chunk.status === "error") completedTaskIds.add(chunk.id)
+
         appendToStream({
             chunks: [
                 {
@@ -128,6 +150,30 @@ async function streamPromptToSlack(
         })
     }
 
+    const flushThinkingTask = (id: string, status: SlackTaskStatus = "in_progress", force = false) => {
+        const thinking = thinkingBuffers.get(id) || ""
+        if (!thinking) return
+
+        const now = Date.now()
+        const lastFlushAt = thinkingLastFlushAt.get(id) || 0
+        const lastFlushLength = thinkingLastFlushLength.get(id) || 0
+        const enoughTimePassed = now - lastFlushAt >= THINKING_FLUSH_INTERVAL_MS
+        const enoughTextArrived = thinking.length - lastFlushLength >= THINKING_FLUSH_CHARS
+        if (!force && !enoughTimePassed && !enoughTextArrived) return
+
+        const progressId = thinkingProgressIds.get(id) || `${id}-progress-${thinkingLastFlushLength.size}`
+        thinkingProgressIds.set(id, progressId)
+        appendTaskUpdate({
+            type: "task_update",
+            id: force ? `${id}-final` : `${progressId}-${thinkingLastFlushLength.get(id) || 0}`,
+            title: force ? "Reasoning" : "Thinking",
+            status,
+            output: force ? getThinkingPreview(thinking) : getThinkingProgressPreview(thinking),
+        })
+        thinkingLastFlushAt.set(id, now)
+        thinkingLastFlushLength.set(id, thinking.length)
+    }
+
     const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
         if (event.type === "turn_start") {
             turnIndex += 1
@@ -137,30 +183,23 @@ async function streamPromptToSlack(
         if (event.type === "tool_execution_start") {
             appendTaskUpdate({
                 type: "task_update",
-                id: `execution-${event.toolCallId}`,
+                id: `execution-${event.toolCallId}-start`,
                 title: `Run ${event.toolName}`,
                 status: "in_progress",
-                details: formatToolInput(event.toolName, event.args),
+                details: "Executing tool.",
             })
             return
         }
 
         if (event.type === "tool_execution_update") {
-            appendTaskUpdate({
-                type: "task_update",
-                id: `execution-${event.toolCallId}`,
-                title: `Run ${event.toolName}`,
-                status: "in_progress",
-                output: formatToolOutput(event.toolName, event.partialResult),
-            })
             return
         }
 
         if (event.type === "tool_execution_end") {
             appendTaskUpdate({
                 type: "task_update",
-                id: `execution-${event.toolCallId}`,
-                title: `Run ${event.toolName}`,
+                id: `execution-${event.toolCallId}-end`,
+                title: `Finished ${event.toolName}`,
                 status: event.isError ? "error" : "complete",
                 output: formatToolOutput(event.toolName, event.result),
             })
@@ -182,6 +221,7 @@ async function streamPromptToSlack(
             const key = `${turnIndex}-${event.assistantMessageEvent.contentIndex}`
             const id = thinkingTaskIds.get(key) || `thinking-${key}`
             thinkingBuffers.set(id, `${thinkingBuffers.get(id) || ""}${event.assistantMessageEvent.delta}`)
+            flushThinkingTask(id)
             return
         }
 
@@ -189,23 +229,21 @@ async function streamPromptToSlack(
             const key = `${turnIndex}-${event.assistantMessageEvent.contentIndex}`
             const id = thinkingTaskIds.get(key) || `thinking-${key}`
             const thinking = event.assistantMessageEvent.content || thinkingBuffers.get(id) || ""
-            appendTaskUpdate({
-                type: "task_update",
-                id,
-                title: "Reasoning",
-                status: "complete",
-                output: thinking,
-            })
+            thinkingBuffers.set(id, thinking)
+            flushThinkingTask(id, "complete", true)
             if (id === "thinking-current") resolvedInitialThinkingTask = true
             thinkingTaskIds.delete(key)
             thinkingBuffers.delete(id)
+            thinkingProgressIds.delete(id)
+            thinkingLastFlushAt.delete(id)
+            thinkingLastFlushLength.delete(id)
             return
         }
 
         if (event.assistantMessageEvent.type === "toolcall_start") {
             appendTaskUpdate({
                 type: "task_update",
-                id: `input-${turnIndex}-${event.assistantMessageEvent.contentIndex}`,
+                id: `input-${turnIndex}-${event.assistantMessageEvent.contentIndex}-pending`,
                 title: "Tool input",
                 status: "in_progress",
                 details: "Preparing tool arguments.",
@@ -216,7 +254,7 @@ async function streamPromptToSlack(
         if (event.assistantMessageEvent.type === "toolcall_end") {
             appendTaskUpdate({
                 type: "task_update",
-                id: `input-${turnIndex}-${event.assistantMessageEvent.contentIndex}`,
+                id: `input-${turnIndex}-${event.assistantMessageEvent.contentIndex}-final`,
                 title: `${event.assistantMessageEvent.toolCall.name} input`,
                 status: "complete",
                 details: formatToolInput(event.assistantMessageEvent.toolCall.name, event.assistantMessageEvent.toolCall.arguments),
@@ -239,7 +277,7 @@ async function streamPromptToSlack(
         try {
             appendTaskUpdate({
                 type: "task_update",
-                id: "thinking-current",
+                id: "thinking-current-start",
                 title: "Reasoning",
                 status: "in_progress",
                 details: "Thinking through the request.",
@@ -254,7 +292,7 @@ async function streamPromptToSlack(
         if (usedStream && !resolvedInitialThinkingTask) {
             appendTaskUpdate({
                 type: "task_update",
-                id: "thinking-current",
+                id: "thinking-current-fallback",
                 title: "Reasoning",
                 status: promptError ? "error" : "complete",
                 details: promptError ? "The run ended before reasoning finished." : "Reasoning stream finished.",

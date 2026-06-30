@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { getSession } from "./pi";
+import { getSession, scheduleThreadSessionSleep } from "./pi";
 import type { App } from "@slack/bolt";
 import type {
     AgentSession,
@@ -9,9 +9,6 @@ import { subagent } from "../slack/subagents";
 
 const SLACK_CHANNEL_ID = process.env.SLACK_CHANNEL_ID || "C0BDBR2MEPM";
 const SLACK_TASK_TEXT_LIMIT = 256;
-const THINKING_FLUSH_INTERVAL_MS = 500;
-const THINKING_FLUSH_CHARS = 160;
-const THINKING_PROGRESS_PREVIEW_CHARS = 120;
 const routedThreads = new Set<string>();
 
 export interface SlackReplyTarget {
@@ -131,14 +128,6 @@ function getThinkingPreview(thinking: string) {
     return truncateTaskText(thinking);
 }
 
-function getThinkingProgressPreview(thinking: string) {
-    const preview =
-        thinking.length <= THINKING_PROGRESS_PREVIEW_CHARS
-            ? thinking
-            : `...${thinking.slice(thinking.length - THINKING_PROGRESS_PREVIEW_CHARS)}`;
-    return truncateTaskText(preview);
-}
-
 async function streamPromptToSlack(
     threadTs: string,
     session: AgentSession,
@@ -164,8 +153,6 @@ async function streamPromptToSlack(
     let turnIndex = 0;
     const thinkingBuffers = new Map<string, string>();
     const thinkingTaskIds = new Map<string, string>();
-    const thinkingLastFlushAt = new Map<string, number>();
-    const thinkingLastFlushLength = new Map<string, number>();
     const completedTaskIds = new Set<string>();
     let claimedInitialThinkingTask = false;
     let resolvedInitialThinkingTask = false;
@@ -198,34 +185,17 @@ async function streamPromptToSlack(
         });
     };
 
-    const flushThinkingTask = (
-        id: string,
-        status: SlackTaskStatus = "in_progress",
-        force = false,
-    ) => {
+    const completeThinkingTask = (id: string) => {
         const thinking = thinkingBuffers.get(id) || "";
         if (!thinking) return;
-
-        const now = Date.now();
-        const lastFlushAt = thinkingLastFlushAt.get(id) || 0;
-        const lastFlushLength = thinkingLastFlushLength.get(id) || 0;
-        const enoughTimePassed =
-            now - lastFlushAt >= THINKING_FLUSH_INTERVAL_MS;
-        const enoughTextArrived =
-            thinking.length - lastFlushLength >= THINKING_FLUSH_CHARS;
-        if (!force && !enoughTimePassed && !enoughTextArrived) return;
 
         appendTaskUpdate({
             type: "task_update",
             id,
-            title: force ? "Reasoning" : "Thinking",
-            status,
-            output: force
-                ? getThinkingPreview(thinking)
-                : getThinkingProgressPreview(thinking),
+            title: "Reasoning",
+            status: "complete",
+            output: getThinkingPreview(thinking),
         });
-        thinkingLastFlushAt.set(id, now);
-        thinkingLastFlushLength.set(id, thinking.length);
     };
 
     const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
@@ -280,7 +250,6 @@ async function streamPromptToSlack(
                 id,
                 `${thinkingBuffers.get(id) || ""}${event.assistantMessageEvent.delta}`,
             );
-            flushThinkingTask(id);
             return;
         }
 
@@ -292,12 +261,10 @@ async function streamPromptToSlack(
                 thinkingBuffers.get(id) ||
                 "";
             thinkingBuffers.set(id, thinking);
-            flushThinkingTask(id, "complete", true);
+            completeThinkingTask(id);
             if (id === "thinking-current") resolvedInitialThinkingTask = true;
             thinkingTaskIds.delete(key);
             thinkingBuffers.delete(id);
-            thinkingLastFlushAt.delete(id);
-            thinkingLastFlushLength.delete(id);
             return;
         }
 
@@ -399,24 +366,28 @@ export async function handleNewMessage(
     const { session, agent } = await getSession(threadTs);
     await sendSubagentRoutingMessage(threadTs, app, target, agent);
 
-    const streamed = await streamPromptToSlack(
-        threadTs,
-        session,
-        () => session.prompt(message),
-        app,
-        target,
-        agent,
-    );
+    try {
+        const streamed = await streamPromptToSlack(
+            threadTs,
+            session,
+            () => session.prompt(message),
+            app,
+            target,
+            agent,
+        );
 
-    const piMessage = session.state.messages
-        .slice()
-        .reverse()
-        .find((message: any) => message.role === "assistant");
-    if (!piMessage) return;
+        const piMessage = session.state.messages
+            .slice()
+            .reverse()
+            .find((message: any) => message.role === "assistant");
+        if (!piMessage) return;
 
-    const text = getTextContent(piMessage);
-    if (!text) return;
+        const text = getTextContent(piMessage);
+        if (!text) return;
 
-    if (!streamed)
-        await sendMdMessageInThread(threadTs, text, app, target, agent);
+        if (!streamed)
+            await sendMdMessageInThread(threadTs, text, app, target, agent);
+    } finally {
+        scheduleThreadSessionSleep(threadTs);
+    }
 }

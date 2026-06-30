@@ -20,7 +20,14 @@ export interface ThreadAgentSession {
     agent: subagent;
 }
 
-const sessions = new Map<string, Promise<ThreadAgentSession>>();
+const SESSION_IDLE_MS = 3 * 60 * 1000;
+
+interface CachedThreadSession {
+    promise: Promise<ThreadAgentSession>;
+    idleTimer?: ReturnType<typeof setTimeout>;
+}
+
+const sessions = new Map<string, CachedThreadSession>();
 let resourceLoaderPromise: Promise<DefaultResourceLoader> | undefined;
 
 function threadSessionDir(threadTs: string) {
@@ -54,6 +61,10 @@ async function getThreadSubagent(threadTs: string) {
 }
 
 async function createOrResumeThreadSession(threadTs: string) {
+    if (!process.env.E2B_API_KEY) {
+        throw new Error("E2B_API_KEY is required for Slack bot sessions");
+    }
+
     let manager = SessionManager.continueRecent(
         process.cwd(),
         threadSessionDir(threadTs),
@@ -65,6 +76,7 @@ async function createOrResumeThreadSession(threadTs: string) {
         modelRegistry,
         resourceLoader: await getResourceLoader(),
     });
+    await session.bindExtensions({ mode: "rpc" });
 
     return session;
 }
@@ -74,13 +86,14 @@ async function getResourceLoader() {
     if (resourceLoaderPromise) return resourceLoaderPromise;
 
     resourceLoaderPromise = (async () => {
-        let extraInstructions = [
+        const extraInstructions = [
             "You must use Slack mrkdwn formatting for your responses.",
         ];
 
         const loader = new DefaultResourceLoader({
             cwd: process.cwd(),
             agentDir: getAgentDir(),
+            additionalExtensionPaths: ["src/e2b/extension.ts"],
             appendSystemPromptOverride: (base) => [
                 ...base,
                 `## Extra Instructions\n${extraInstructions.map((instruction) => `- ${instruction}`).join("\n")}`,
@@ -88,6 +101,9 @@ async function getResourceLoader() {
         });
 
         await loader.reload();
+        const extensionsResult = loader.getExtensions();
+        extensionsResult.runtime.flagValues.set("e2b", true);
+        extensionsResult.runtime.flagValues.set("e2b-sync", true);
         return loader;
     })();
 
@@ -95,7 +111,10 @@ async function getResourceLoader() {
 }
 export async function getSession(threadTs: string) {
     let existingSession = sessions.get(threadTs);
-    if (existingSession) return existingSession;
+    if (existingSession) {
+        clearThreadSessionIdleTimer(existingSession);
+        return existingSession.promise;
+    }
 
     const sessionPromise = Promise.all([
         createOrResumeThreadSession(threadTs),
@@ -108,8 +127,43 @@ export async function getSession(threadTs: string) {
         return { session, agent };
     });
 
-    sessions.set(threadTs, sessionPromise);
+    const cachedSession: CachedThreadSession = { promise: sessionPromise };
+    sessions.set(threadTs, cachedSession);
     sessionPromise.catch(() => sessions.delete(threadTs));
 
     return sessionPromise;
+}
+
+function clearThreadSessionIdleTimer(cachedSession: CachedThreadSession) {
+    if (!cachedSession.idleTimer) return;
+    clearTimeout(cachedSession.idleTimer);
+    cachedSession.idleTimer = undefined;
+}
+
+export function scheduleThreadSessionSleep(threadTs: string) {
+    const cachedSession = sessions.get(threadTs);
+    if (!cachedSession) return;
+
+    clearThreadSessionIdleTimer(cachedSession);
+    cachedSession.idleTimer = setTimeout(() => {
+        void sleepThreadSession(threadTs, cachedSession);
+    }, SESSION_IDLE_MS);
+    cachedSession.idleTimer.unref?.();
+}
+
+async function sleepThreadSession(
+    threadTs: string,
+    cachedSession: CachedThreadSession,
+) {
+    if (sessions.get(threadTs) !== cachedSession) return;
+
+    sessions.delete(threadTs);
+    clearThreadSessionIdleTimer(cachedSession);
+
+    const { session } = await cachedSession.promise;
+    await session.extensionRunner.emit({
+        type: "session_shutdown",
+        reason: "quit",
+    });
+    session.dispose();
 }

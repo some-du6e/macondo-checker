@@ -19,6 +19,7 @@
     "dependencies": {
         "@earendil-works/pi-coding-agent": "^0.80.2",
         "@slack/bolt": "^4.7.3",
+        "e2b": "^2.31.0",
         "zod": "^4.4.3"
     },
     "scripts": {

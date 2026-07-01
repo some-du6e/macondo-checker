@@ -7,14 +7,12 @@ import {
     DefaultResourceLoader,
     getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { createModels } from "@earendil-works/pi-ai";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, join } from "path";
 import { subagent } from "../slack/subagents";
 // Set up credential storage and model registry
 const authStorage = AuthStorage.create();
 const modelRegistry = ModelRegistry.create(authStorage);
-const models = createModels({});
 export interface ThreadAgentSession {
     session: AgentSession;
     agent: subagent;
@@ -65,7 +63,7 @@ async function createOrResumeThreadSession(threadTs: string) {
         throw new Error("E2B_API_KEY is required for Slack bot sessions");
     }
 
-    let manager = SessionManager.continueRecent(
+    const manager = SessionManager.continueRecent(
         process.cwd(),
         threadSessionDir(threadTs),
     );
@@ -110,7 +108,7 @@ async function getResourceLoader() {
     return resourceLoaderPromise;
 }
 export async function getSession(threadTs: string) {
-    let existingSession = sessions.get(threadTs);
+    const existingSession = sessions.get(threadTs);
     if (existingSession) {
         clearThreadSessionIdleTimer(existingSession);
         return existingSession.promise;

@@ -926,6 +926,10 @@ export default function (pi: ExtensionAPI) {
             sandboxId = null;
             sandboxTemplate = null;
             startedAt = null;
+            // An earlier session can have registered the E2B tool overrides. Do not
+            // leave those overrides pointing at a cleared sandbox after startup
+            // fails; the next command should still be able to use the local tools.
+            restoreLocalTools();
             safeSetWorking(ctx, undefined); // restore default working message on failure
             throw initErr;
         }

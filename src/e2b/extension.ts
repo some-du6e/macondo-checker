@@ -1065,6 +1065,10 @@ export default function (pi: ExtensionAPI) {
                 `E2B sandbox initialisation failed: ${err instanceof Error ? err.message : err}`,
                 "error",
             );
+            // Surface startup failures to non-interactive hosts. The Slack RPC
+            // integration treats this as fatal so it can never silently fall
+            // back to tools that execute on the host machine.
+            throw err;
         }
     });
 

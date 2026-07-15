@@ -151,7 +151,25 @@ async function createOrResumeThreadSession(threadTs: string) {
         modelRegistry,
         resourceLoader: await getResourceLoader(),
     });
-    await session.bindExtensions({ mode: "rpc" });
+    let e2bStartupError: Error | undefined;
+    await session.bindExtensions({
+        mode: "rpc",
+        onError: (error) => {
+            if (
+                error.event === "session_start" &&
+                error.extensionPath.includes("src/e2b/extension.ts")
+            ) {
+                e2bStartupError = new Error(
+                    `E2B extension failed during startup: ${error.error}`,
+                );
+            }
+        },
+    });
+
+    if (e2bStartupError) {
+        session.dispose();
+        throw e2bStartupError;
+    }
 
     return session;
 }
@@ -170,8 +188,10 @@ async function getResourceLoader() {
             cwd: process.cwd(),
             agentDir: getAgentDir(),
             additionalExtensionPaths: ["src/e2b/extension.ts"],
+            agentsFilesOverride: () => ({ agentsFiles: [] }),
             appendSystemPromptOverride: (base) => [
                 ...base,
+                `... ${console.log(base)}`,
                 `## Extra Instructions\n${extraInstructions.map((instruction) => `- ${instruction}`).join("\n")}`,
             ],
         });

@@ -169,10 +169,7 @@ async function getResourceLoader() {
         const loader = new DefaultResourceLoader({
             cwd: process.cwd(),
             agentDir: getAgentDir(),
-            additionalExtensionPaths: [
-                "src/e2b/extension.ts",
-                "src/pi/providerLogging.ts",
-            ],
+            additionalExtensionPaths: ["src/e2b/extension.ts"],
             appendSystemPromptOverride: (base) => [
                 ...base,
                 `## Extra Instructions\n${extraInstructions.map((instruction) => `- ${instruction}`).join("\n")}`,

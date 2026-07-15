@@ -204,6 +204,41 @@ async function streamPromptToSlack(
             return;
         }
 
+        if (event.type === "auto_retry_start") {
+            console.warn("[pi/run] retrying", {
+                threadTs,
+                attempt: event.attempt,
+                maxAttempts: event.maxAttempts,
+                delayMs: event.delayMs,
+                error: event.errorMessage,
+            });
+            return;
+        }
+
+        if (event.type === "auto_retry_end" && !event.success) {
+            console.error("[pi/run] retries exhausted", {
+                threadTs,
+                attempt: event.attempt,
+                error: event.finalError,
+            });
+            return;
+        }
+
+        if (
+            event.type === "message_end" &&
+            event.message.role === "assistant"
+        ) {
+            console.info("[pi/run] assistant message ended", {
+                threadTs,
+                stopReason: event.message.stopReason,
+                error: event.message.errorMessage,
+                contentTypes: Array.isArray(event.message.content)
+                    ? event.message.content.map((content) => content.type)
+                    : [],
+            });
+            return;
+        }
+
         if (event.type === "tool_execution_start") {
             appendTaskUpdate({
                 type: "task_update",
@@ -316,6 +351,10 @@ async function streamPromptToSlack(
             await prompt();
         } catch (error) {
             promptError = error;
+            console.error("[pi/run] prompt failed", {
+                threadTs,
+                error,
+            });
         }
 
         await appendPromise;

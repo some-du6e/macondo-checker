@@ -486,7 +486,6 @@ async function getResourceLoader() {
     resourceLoaderPromise = (async () => {
         const extraInstructions = [
             "You must use Slack mrkdwn formatting for your responses.",
-            "You can use the provided file and shell tools. For a public GitHub URL, use git clone or curl with the shell tool instead of claiming you cannot access the internet. If a tool fails, report its actual error and try an available local-tool fallback when appropriate.",
         ];
 
         const loader = new DefaultResourceLoader({

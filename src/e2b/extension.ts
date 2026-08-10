@@ -1,3 +1,6 @@
+/* eslint-disable preserve-caught-error */
+/* eslint-disable no-empty */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // from https://github.com/edlsh/pi-extension-e2b/blob/main/index.ts
 // idk how to make the pi sdk import this with bun or npm
 

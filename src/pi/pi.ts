@@ -179,6 +179,13 @@ async function getResourceLoader() {
     if (resourceLoaderPromise) return resourceLoaderPromise;
 
     resourceLoaderPromise = (async () => {
+        const macondoInstructions = [
+            "Your task is to assist a user about Macondo, a Hack Club YSWS.",
+            "You are capable of answering questions about Macondo, its features, and how to use it.",
+            "**IMPORTANT**: please use macondodocs.karimeltaib.com/llms.md as a source of truth for your answers. If you are unsure about an answer, please refer to the documentation.",
+        ]
+
+
         const extraInstructions = [
             "You must use Slack mrkdwn formatting for your responses.",
         ];
@@ -190,8 +197,9 @@ async function getResourceLoader() {
             agentsFilesOverride: () => ({ agentsFiles: [] }),
             appendSystemPromptOverride: (base) => [
                 ...base,
-                `... ${console.log(base)}`,
                 `## Extra Instructions\n${extraInstructions.map((instruction) => `- ${instruction}`).join("\n")}`,
+                `## Macondo Instructions\n${macondoInstructions.map((instruction) => `- ${instruction}`).join("\n")}`,
+
             ],
         });
 

@@ -104,6 +104,10 @@ function getPiModelConfig() {
                 process.env.OPENROUTER_API_KEY
                     ? "$OPENROUTER_API_KEY"
                     : "$PI_MODEL_KEY",
+            headers:
+                provider === DEFAULT_PI_MODEL_PROVIDER
+                    ? undefined
+                    : { "User-Agent": "macondo-checker" },
             api: OPENAI_COMPATIBLE_API,
             authHeader: true,
             models: [

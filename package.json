@@ -24,7 +24,7 @@
     },
     "scripts": {
         "check": "bunx tsc --noEmit",
-        "dev": "bun run src/index.ts",
+        "dev": "bun --hot run src/index.ts",
         "format": "prettier --write src package.json README.md todo.md eslint.config.ts agents.md tsconfig.json .prettierrc",
         "format:check": "prettier --check src package.json README.md todo.md eslint.config.ts agents.md tsconfig.json .prettierrc",
         "start": "bun run src/index.ts",

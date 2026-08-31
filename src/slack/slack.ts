@@ -25,7 +25,10 @@ app.message(async ({ message, context, body }) => {
     if (slackMessage.bot_id || slackMessage.subtype === "bot_message") return;
     if (!slackMessage.text) return;
     // Avoid double-handling: app_mention below already covers messages that ping the bot
-    if (context.botUserId && slackMessage.text.includes(`<@${context.botUserId}>`))
+    if (
+        context.botUserId &&
+        slackMessage.text.includes(`<@${context.botUserId}>`)
+    )
         return;
 
     const threadTs = getThreadTs(slackMessage);

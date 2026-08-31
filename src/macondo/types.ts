@@ -12,7 +12,7 @@ export const fruitSchema = z.enum([
 ]);
 export type fruit = z.infer<typeof fruitSchema>;
 
-export const SlackUserIdSchema = z.string().regex(/^U[A-Z0-9]{8,10}$/);
+export const SlackUserIdSchema = z.string().regex(/^U[A-Z0-9]+$/);
 export type SlackUserId = z.infer<typeof SlackUserIdSchema>;
 
 export const userSchema = z.object({
@@ -39,26 +39,37 @@ export const journalSchema = z.object({
 });
 export type journal = z.infer<typeof journalSchema>;
 
-export const projectSchema = z.object({
-    id: z.number(),
-    user_id: z.string().uuid(),
-    name: z.string(),
-    type: z.enum(["software", "hardware"]),
-    description: z.string(),
-    fruit: fruitSchema,
-    demo_url: z.url(),
-    thumbnail_url: z.string().url(),
-    repository_url: z.string().url(),
-    hackatime_projects: z.array(z.string()),
-    is_fork: z.boolean(),
-    project_streak_days: z.number(),
-    last_worked_date: z.date(),
-    next_ship_used_ai: z.string(),
-    next_ship_ai_usage_description: z.string().optional(),
-    next_ship_is_update: z.boolean(),
-    created_at: z.string().datetime(),
-    updated_at: z.string().datetime(),
-    owner: userSchema,
-    journals: journalSchema.array(),
-});
+export const projectSchema = z
+    .object({
+        id: z.number(),
+        user_id: z.string().uuid(),
+        name: z.string(),
+        type: z.enum(["software", "hardware"]),
+        description: z.string(),
+        fruit: fruitSchema.nullable(),
+        level: z.union([z.number(), z.string()]),
+        stage: z.union([z.number(), z.string()]),
+        demo_url: z.url().nullable(),
+        thumbnail_url: z.url().nullable(),
+        repository_url: z.url().nullable(),
+        hackatime_projects: z.array(z.string()),
+        is_fork: z.boolean(),
+        project_streak_days: z.number(),
+        last_worked_date: z.string().nullable(),
+        next_ship_needs_funding: z.boolean(),
+        next_ship_is_build_complete: z.boolean(),
+        next_ship_used_ai: z.boolean(),
+        next_ship_ai_usage_description: z.string().nullable(),
+        next_ship_is_update: z.boolean(),
+        next_ship_update_description: z.string().nullable(),
+        next_ship_reviewer_note: z.string().nullable(),
+        created_at: z.string().datetime(),
+        updated_at: z.string().datetime(),
+        owner: userSchema,
+        journals: journalSchema.array(),
+        activeShip: z.unknown().nullable(),
+        needsChangesShip: z.unknown().nullable(),
+        permRejected: z.boolean(),
+    })
+    .loose();
 export type project = z.infer<typeof projectSchema>;

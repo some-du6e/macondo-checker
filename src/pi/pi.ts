@@ -29,7 +29,6 @@ interface CachedThreadSession {
 }
 
 const sessions = new Map<string, CachedThreadSession>();
-let resourceLoaderPromise: Promise<DefaultResourceLoader> | undefined;
 
 function threadSessionDir(threadTs: string) {
     return `threads/${threadTs.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
@@ -139,7 +138,10 @@ function getPiModelConfig() {
     return { provider, model };
 }
 
-async function createOrResumeThreadSession(threadTs: string) {
+async function createOrResumeThreadSession(
+    threadTs: string,
+    agentName: string,
+) {
     if (!process.env.E2B_API_KEY) {
         throw new Error("E2B_API_KEY is required for Slack bot sessions");
     }
@@ -153,7 +155,7 @@ async function createOrResumeThreadSession(threadTs: string) {
         sessionManager: manager,
         authStorage,
         modelRegistry,
-        resourceLoader: await getResourceLoader(),
+        resourceLoader: await getResourceLoader(agentName),
     });
     let e2bStartupError: Error | undefined;
     await session.bindExtensions({
@@ -178,43 +180,36 @@ async function createOrResumeThreadSession(threadTs: string) {
     return session;
 }
 
-async function getResourceLoader() {
+async function getResourceLoader(agentName: string) {
     // todo macondoise
-    if (resourceLoaderPromise) return resourceLoaderPromise;
+    const macondoInstructions = [
+        "Your task is to assist a user about Macondo, a Hack Club YSWS.",
+        "You are capable of answering questions about Macondo, its features, and how to use it.",
+        "**IMPORTANT**: please use macondodocs.karimeltaib.com/llms.md as a source of truth for your answers. If you are unsure about an answer, please refer to the documentation.",
+    ];
 
-    resourceLoaderPromise = (async () => {
-        const macondoInstructions = [
-            "Your task is to assist a user about Macondo, a Hack Club YSWS.",
-            "You are capable of answering questions about Macondo, its features, and how to use it.",
-            "**IMPORTANT**: please use macondodocs.karimeltaib.com/llms.md as a source of truth for your answers. If you are unsure about an answer, please refer to the documentation.",
-        ]
+    const extraInstructions = [
+        `Your assigned name is ${agentName}. When asked for your name, answer ${agentName}.`,
+        "You must use Slack mrkdwn formatting for your responses.",
+    ];
 
+    const loader = new DefaultResourceLoader({
+        cwd: process.cwd(),
+        agentDir: getAgentDir(),
+        additionalExtensionPaths: ["src/e2b/extension.ts"],
+        agentsFilesOverride: () => ({ agentsFiles: [] }),
+        appendSystemPromptOverride: (base) => [
+            ...base,
+            `## Extra Instructions\n${extraInstructions.map((instruction) => `- ${instruction}`).join("\n")}`,
+            `## Macondo Instructions\n${macondoInstructions.map((instruction) => `- ${instruction}`).join("\n")}`,
+        ],
+    });
 
-        const extraInstructions = [
-            "You must use Slack mrkdwn formatting for your responses.",
-        ];
-
-        const loader = new DefaultResourceLoader({
-            cwd: process.cwd(),
-            agentDir: getAgentDir(),
-            additionalExtensionPaths: ["src/e2b/extension.ts"],
-            agentsFilesOverride: () => ({ agentsFiles: [] }),
-            appendSystemPromptOverride: (base) => [
-                ...base,
-                `## Extra Instructions\n${extraInstructions.map((instruction) => `- ${instruction}`).join("\n")}`,
-                `## Macondo Instructions\n${macondoInstructions.map((instruction) => `- ${instruction}`).join("\n")}`,
-
-            ],
-        });
-
-        await loader.reload();
-        const extensionsResult = loader.getExtensions();
-        extensionsResult.runtime.flagValues.set("e2b", true);
-        extensionsResult.runtime.flagValues.set("e2b-sync", true);
-        return loader;
-    })();
-
-    return resourceLoaderPromise;
+    await loader.reload();
+    const extensionsResult = loader.getExtensions();
+    extensionsResult.runtime.flagValues.set("e2b", true);
+    extensionsResult.runtime.flagValues.set("e2b-sync", true);
+    return loader;
 }
 export async function getSession(threadTs: string) {
     const existingSession = sessions.get(threadTs);
@@ -223,10 +218,8 @@ export async function getSession(threadTs: string) {
         return existingSession.promise;
     }
 
-    const sessionPromise = Promise.all([
-        createOrResumeThreadSession(threadTs),
-        getThreadSubagent(threadTs),
-    ]).then(([session, agent]) => {
+    const sessionPromise = getThreadSubagent(threadTs).then(async (agent) => {
+        const session = await createOrResumeThreadSession(threadTs, agent.name);
         const modelConfig = getPiModelConfig();
         const model = modelRegistry.find(
             modelConfig.provider,

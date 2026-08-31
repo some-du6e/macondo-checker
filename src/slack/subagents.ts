@@ -5,8 +5,8 @@ export class subagent {
     pfp: string;
 
     private constructor(name: string) {
-        this.name = name;
-        this.pfp = `https://github.com/identicons/${name}.png`;
+        this.name = name.trim();
+        this.pfp = `https://github.com/identicons/${this.name}.png`;
     }
 
     static async create(name?: string): Promise<subagent> {

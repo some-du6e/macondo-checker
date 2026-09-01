@@ -19,6 +19,7 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export interface ThreadAgentSession {
     session: AgentSession;
     agent: subagent;
+    isNewThread: boolean;
 }
 
 const SESSION_IDLE_MS = 3 * 60 * 1000;
@@ -44,7 +45,10 @@ async function getThreadSubagent(threadTs: string) {
     try {
         const saved = JSON.parse(await readFile(subagentPath, "utf-8"));
         if (typeof saved.name === "string" && saved.name.trim()) {
-            return subagent.create(saved.name);
+            return {
+                agent: await subagent.create(saved.name),
+                isNewThread: false,
+            };
         }
     } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
@@ -57,7 +61,7 @@ async function getThreadSubagent(threadTs: string) {
         subagentPath,
         `${JSON.stringify({ name: agent.name }, null, 2)}\n`,
     );
-    return agent;
+    return { agent, isNewThread: true };
 }
 
 function getPiModelConfig() {
@@ -242,21 +246,26 @@ export async function getSession(threadTs: string) {
         return existingSession.promise;
     }
 
-    const sessionPromise = getThreadSubagent(threadTs).then(async (agent) => {
-        const session = await createOrResumeThreadSession(threadTs, agent.name);
-        const modelConfig = getPiModelConfig();
-        const model = modelRegistry.find(
-            modelConfig.provider,
-            modelConfig.model,
-        );
-        if (!model)
-            throw new Error(
-                `Model not found: ${modelConfig.provider}/${modelConfig.model}`,
+    const sessionPromise = getThreadSubagent(threadTs).then(
+        async ({ agent, isNewThread }) => {
+            const session = await createOrResumeThreadSession(
+                threadTs,
+                agent.name,
             );
-        session.setModel(model);
+            const modelConfig = getPiModelConfig();
+            const model = modelRegistry.find(
+                modelConfig.provider,
+                modelConfig.model,
+            );
+            if (!model)
+                throw new Error(
+                    `Model not found: ${modelConfig.provider}/${modelConfig.model}`,
+                );
+            session.setModel(model);
 
-        return { session, agent };
-    });
+            return { session, agent, isNewThread };
+        },
+    );
 
     const cachedSession: CachedThreadSession = { promise: sessionPromise };
     sessions.set(threadTs, cachedSession);

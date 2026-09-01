@@ -427,8 +427,9 @@ export async function handleNewMessage(
 ) {
     if (message.trim().startsWith("##")) return; // ignore it like the gork(ie) bots
 
-    const { session, agent } = await getSession(threadTs);
-    await sendSubagentRoutingMessage(threadTs, app, target, agent);
+    const { session, agent, isNewThread } = await getSession(threadTs);
+    if (isNewThread)
+        await sendSubagentRoutingMessage(threadTs, app, target, agent);
 
     try {
         let streamed = false;

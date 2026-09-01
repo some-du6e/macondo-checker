@@ -25,6 +25,13 @@ function getSlackChannel(target: SlackReplyTarget) {
     return target.channel || SLACK_CHANNEL_ID;
 }
 
+function toSlackMrkdwn(markdown: string) {
+    return markdown.replace(
+        /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+        "<$2|$1>",
+    );
+}
+
 async function sendMdMessageInThread(
     threadTs: string,
     markdownMessage: string,
@@ -32,7 +39,7 @@ async function sendMdMessageInThread(
     target: SlackReplyTarget,
     agent?: subagent,
 ) {
-    let remaining = markdownMessage;
+    let remaining = toSlackMrkdwn(markdownMessage);
 
     while (remaining) {
         const messageChunk = remaining.slice(0, SLACK_MESSAGE_TEXT_LIMIT);
@@ -170,6 +177,7 @@ async function streamPromptToSlack(
     });
 
     let sawTextDelta = false;
+    let responseText = "";
     let usedStream = false;
     let appendPromise = Promise.resolve();
     let streamError: unknown;
@@ -351,7 +359,7 @@ async function streamPromptToSlack(
         if (!delta) return;
 
         sawTextDelta = true;
-        appendToStream({ markdown_text: delta });
+        responseText += delta;
     });
 
     let promptError: unknown;
@@ -368,6 +376,10 @@ async function streamPromptToSlack(
             await prompt();
         } catch (error) {
             promptError = error;
+        }
+
+        if (responseText) {
+            appendToStream({ markdown_text: toSlackMrkdwn(responseText) });
         }
 
         await waitForAppends();

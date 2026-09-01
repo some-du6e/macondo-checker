@@ -209,7 +209,7 @@ async function getResourceLoader(agentName: string) {
 
     const extraInstructions = [
         `Your assigned name is ${agentName}. When asked for your name, answer ${agentName}.`,
-        "You must use Slack mrkdwn formatting for your responses.",
+        "You must use Slack mrkdwn formatting for your responses. Format links as <URL|label>, never [label](URL).",
     ];
 
     const loader = new DefaultResourceLoader({

@@ -12,7 +12,7 @@
  *
  * Usage:
  *   pi --e2b                          # Create new sandbox (no file sync)
- *   pi --e2b --e2b-sync              # Create new sandbox and sync local files
+ *   pi --e2b --e2b-sync              # Create new sandbox and sync local docs
  *   pi --e2b --e2b-template custom    # Use a custom template
  *   pi --e2b --e2b-sandbox <id>       # Reconnect to an existing sandbox
  *
@@ -60,7 +60,7 @@ import {
     formatSize,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
     readFileSync,
     existsSync,
@@ -69,12 +69,14 @@ import {
     unlinkSync,
 } from "node:fs";
 import nodePath from "node:path";
+import { tmpdir } from "node:os";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Constants
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const REMOTE_PROJECT_DIR = "/home/user/project";
+const LOCAL_DOCS_DIR = "docs";
 const SANDBOX_TIMEOUT_MS = 60 * 60 * 1000; // 60 minutes
 const KEEPALIVE_INTERVAL_MS = 5 * 60 * 1000; // extend every 5 minutes
 const CMD_TIMEOUT_MS = 5 * 60 * 1000; // default command timeout: 5 minutes
@@ -290,41 +292,47 @@ function createE2bFindOps(getSandbox: () => Sandbox): FindOperations {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// File sync – tar the local project, upload, extract in sandbox
+// Docs sync – upload only the local reference material the agent needs
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function syncLocalToSandbox(
+async function syncDocsToSandbox(
     sbx: Sandbox,
     localCwd: string,
 ): Promise<{ fileCount: number; size: string }> {
-    const tmpTar = nodePath.join(
-        process.env.TMPDIR || "/tmp",
-        `e2b-sync-${Date.now()}.tar.gz`,
-    );
+    const tmpTar = nodePath.join(tmpdir(), `e2b-sync-${Date.now()}.tar.gz`);
 
     try {
         const isGitRepo = existsSync(nodePath.join(localCwd, ".git"));
 
         if (isGitRepo) {
-            try {
-                execSync(
-                    `git archive --format=tar HEAD | gzip > ${sq(tmpTar)}`,
-                    {
-                        cwd: localCwd,
-                        stdio: "pipe",
-                        timeout: 120_000,
-                    },
-                );
-            } catch {
-                // Fallback if git archive fails (maybe no commits yet)
-                execSync(
-                    `tar -czf ${sq(tmpTar)} --exclude='.git' --exclude='node_modules' --exclude='.next' --exclude='dist' --exclude='build' --exclude='__pycache__' --exclude='.venv' --exclude='venv' -C ${sq(localCwd)} .`,
-                    { stdio: "pipe", timeout: 120_000 },
-                );
-            }
+            // Include fresh untracked docs while honoring .gitignore.
+            const files = execFileSync(
+                "git",
+                [
+                    "ls-files",
+                    "-z",
+                    "--cached",
+                    "--others",
+                    "--exclude-standard",
+                    "--",
+                    LOCAL_DOCS_DIR,
+                ],
+                {
+                    cwd: localCwd,
+                    timeout: 120_000,
+                    maxBuffer: 16 * 1024 * 1024,
+                },
+            );
+            execFileSync("tar", ["-czf", tmpTar, "--null", "-T", "-"], {
+                cwd: localCwd,
+                input: files,
+                stdio: ["pipe", "pipe", "pipe"],
+                timeout: 120_000,
+            });
         } else {
-            execSync(
-                `tar -czf ${sq(tmpTar)} --exclude='.git' --exclude='node_modules' --exclude='.next' --exclude='dist' --exclude='build' --exclude='__pycache__' --exclude='.venv' --exclude='venv' -C ${sq(localCwd)} .`,
+            execFileSync(
+                "tar",
+                ["-czf", tmpTar, "-C", localCwd, LOCAL_DOCS_DIR],
                 { stdio: "pipe", timeout: 120_000 },
             );
         }
@@ -348,7 +356,7 @@ async function syncLocalToSandbox(
         let fileCount = 0;
         try {
             const countResult = await sbx.commands.run(
-                `find ${REMOTE_PROJECT_DIR} -type f 2>/dev/null | wc -l`,
+                `find ${REMOTE_PROJECT_DIR}/${LOCAL_DOCS_DIR} -type f 2>/dev/null | wc -l`,
                 { timeoutMs: 10_000 },
             );
             fileCount = parseInt(countResult.stdout.trim()) || 0;
@@ -637,12 +645,12 @@ export default function (pi: ExtensionAPI) {
                         `󰑓 E2B: Syncing files to ${sandboxId}…`,
                     ),
                 );
-                safeSetWorking(ctx, `Syncing project files to E2B sandbox…`);
+                safeSetWorking(ctx, `Syncing docs to E2B sandbox…`);
                 try {
-                    const sync = await syncLocalToSandbox(sandbox, localCwd);
+                    const sync = await syncDocsToSandbox(sandbox, localCwd);
                     safeNotify(
                         ctx,
-                        `E2B Sandbox ready! (${sandboxId})\n  󰉋 ${sync.fileCount} files synced (${sync.size})`,
+                        `E2B Sandbox ready! (${sandboxId})\n  󰉋 ${sync.fileCount} docs synced (${sync.size})`,
                         "info",
                     );
                 } catch (syncErr) {
@@ -1153,7 +1161,7 @@ export default function (pi: ExtensionAPI) {
                 `  Processes:  ${runningProcs}`,
                 "",
                 "  Commands:",
-                "    /e2b-upload [local-path]               Re-sync all or upload specific file",
+                "    /e2b-upload [local-path]               Re-sync docs or upload specific file",
                 "    /e2b-download <remote-path> [local]    Download file from sandbox",
                 "    /e2b-reconnect <sandbox-id>            Reconnect to another sandbox",
             ];
@@ -1163,7 +1171,7 @@ export default function (pi: ExtensionAPI) {
 
     pi.registerCommand("e2b-upload", {
         description:
-            "Upload local file(s) to the E2B sandbox (no args = re-sync project)",
+            "Upload local file(s) to the E2B sandbox (no args = re-sync docs)",
         handler: async (args, ctx) => {
             if (!sandbox || !sandboxEnabled) {
                 safeNotify(ctx, "E2B sandbox not active", "error");
@@ -1177,10 +1185,10 @@ export default function (pi: ExtensionAPI) {
                     safeThemeFg(ctx, "warning", "󰑓 E2B: Re-syncing files…"),
                 );
                 try {
-                    const sync = await syncLocalToSandbox(sandbox, localCwd);
+                    const sync = await syncDocsToSandbox(sandbox, localCwd);
                     safeNotify(
                         ctx,
-                        `Synced ${sync.fileCount} files (${sync.size})`,
+                        `Synced ${sync.fileCount} docs (${sync.size})`,
                         "info",
                     );
                 } catch (err) {

@@ -1,5 +1,7 @@
 # macondo-checker
 
+[Privacy Policy](./PRIVACY.md)
+
 ## running
 
 To install dependencies:

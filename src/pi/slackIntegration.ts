@@ -9,6 +9,10 @@ import { subagent } from "../slack/subagents";
 
 const SLACK_CHANNEL_ID = process.env.SLACK_CHANNEL_ID || "C0BDBR2MEPM";
 const SLACK_TASK_TEXT_LIMIT = 256;
+const SLACK_TASK_LIMIT = 24;
+const SLACK_MESSAGE_TEXT_LIMIT = 2_900;
+// Leave room for ChatStreamer's internal buffer under Slack's 12,000-character cap.
+const SLACK_STREAM_APPEND_TEXT_LIMIT = 11_500;
 const routedThreads = new Set<string>();
 
 export interface SlackReplyTarget {
@@ -28,21 +32,39 @@ async function sendMdMessageInThread(
     target: SlackReplyTarget,
     agent?: subagent,
 ) {
-    await app.client.chat.postMessage({
-        channel: getSlackChannel(target),
-        blocks: [
-            {
-                type: "section",
-                text: {
-                    type: "mrkdwn",
-                    text: markdownMessage,
+    let remaining = markdownMessage;
+
+    while (remaining) {
+        const messageChunk = remaining.slice(0, SLACK_MESSAGE_TEXT_LIMIT);
+        await app.client.chat.postMessage({
+            channel: getSlackChannel(target),
+            text: messageChunk,
+            blocks: [
+                {
+                    type: "section",
+                    text: {
+                        type: "mrkdwn",
+                        text: messageChunk,
+                    },
                 },
-            },
-        ],
-        thread_ts: threadTs.toString(),
-        icon_url: agent?.pfp,
-        username: agent?.name,
-    });
+            ],
+            thread_ts: threadTs.toString(),
+            icon_url: agent?.pfp,
+            username: agent?.name,
+        });
+        remaining = remaining.slice(messageChunk.length);
+    }
+}
+
+function isSlackMessageTooLong(error: unknown) {
+    if (!error || typeof error !== "object" || !("data" in error)) return false;
+    const data = error.data;
+    return (
+        !!data &&
+        typeof data === "object" &&
+        "error" in data &&
+        data.error === "msg_too_long"
+    );
 }
 
 async function sendSubagentRoutingMessage(
@@ -150,9 +172,11 @@ async function streamPromptToSlack(
     let sawTextDelta = false;
     let usedStream = false;
     let appendPromise = Promise.resolve();
+    let streamError: unknown;
     let turnIndex = 0;
     const thinkingBuffers = new Map<string, string>();
     const thinkingTaskIds = new Map<string, string>();
+    const trackedTaskIds = new Set<string>();
     const completedTaskIds = new Set<string>();
     let claimedInitialThinkingTask = false;
     let resolvedInitialThinkingTask = false;
@@ -160,11 +184,39 @@ async function streamPromptToSlack(
     const appendToStream = (args: Parameters<typeof streamer.append>[0]) => {
         usedStream = true;
         appendPromise = appendPromise.then(async () => {
-            await streamer.append(args);
+            if (streamError) return;
+
+            try {
+                if (!args.markdown_text) {
+                    await streamer.append(args);
+                    return;
+                }
+
+                let markdownText = args.markdown_text;
+                while (markdownText) {
+                    const chunk = markdownText.slice(
+                        0,
+                        SLACK_STREAM_APPEND_TEXT_LIMIT,
+                    );
+                    await streamer.append({ ...args, markdown_text: chunk });
+                    markdownText = markdownText.slice(chunk.length);
+                }
+            } catch (error) {
+                streamError = error;
+            }
         });
     };
 
+    const waitForAppends = async () => {
+        await appendPromise;
+        if (streamError) throw streamError;
+    };
+
     const appendTaskUpdate = (chunk: SlackTaskUpdateChunk) => {
+        if (!trackedTaskIds.has(chunk.id)) {
+            if (trackedTaskIds.size >= SLACK_TASK_LIMIT) return;
+            trackedTaskIds.add(chunk.id);
+        }
         if (completedTaskIds.has(chunk.id)) return;
         if (chunk.status === "complete" || chunk.status === "error")
             completedTaskIds.add(chunk.id);
@@ -318,7 +370,7 @@ async function streamPromptToSlack(
             promptError = error;
         }
 
-        await appendPromise;
+        await waitForAppends();
 
         if (usedStream && !resolvedInitialThinkingTask) {
             appendTaskUpdate({
@@ -330,7 +382,7 @@ async function streamPromptToSlack(
                     ? "The run ended before reasoning finished."
                     : "Reasoning stream finished.",
             });
-            await appendPromise;
+            await waitForAppends();
         }
 
         if (usedStream) {
@@ -367,14 +419,19 @@ export async function handleNewMessage(
     await sendSubagentRoutingMessage(threadTs, app, target, agent);
 
     try {
-        const streamed = await streamPromptToSlack(
-            threadTs,
-            session,
-            () => session.prompt(message),
-            app,
-            target,
-            agent,
-        );
+        let streamed = false;
+        try {
+            streamed = await streamPromptToSlack(
+                threadTs,
+                session,
+                () => session.prompt(message),
+                app,
+                target,
+                agent,
+            );
+        } catch (error) {
+            if (!isSlackMessageTooLong(error)) throw error;
+        }
 
         const piMessage = session.state.messages
             .slice()

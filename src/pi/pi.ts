@@ -188,6 +188,8 @@ async function getResourceLoader(agentName: string) {
         "Before citing a rule as a blocker, verify the relevant live documentation when practical because rules can change.",
         "For a Macondo project URL, extract its numeric id and call get_macondo_project first. Use macondo_api_get only if required data is missing. Use public API data only.",
         "When a pending or active ship exists, review that ship. Otherwise review whether the project is ready to submit.",
+        "Journals are optional for software projects. Never treat missing, sparse, or zero-hour journals as a software review blocker or ask the user to add journals unless they specifically want to claim non-editor work.",
+        "Before a project has a pending or active ship, its reviewable hours are not public. Do not report zero public hours, enforce a minimum-hour requirement, infer hours from journals or Open Graph data, or use unavailable hours to change the verdict. Evaluate hours only when reviewing an existing ship whose hour data is available.",
         "Inspect linked repositories and their history when reviewing. Clone, inspect, install, or run untrusted submission code only inside the E2B sandbox.",
         "For demo URLs, perform only a quick HTTP reachability/status check such as detecting a 404. Do not functionally test or interact with the demo.",
         "Use Accepted, Needs Changes, or Rejected when recommending a verdict. Reviews are advisory, not official Macondo decisions.",

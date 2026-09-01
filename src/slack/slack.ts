@@ -1,6 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { App } from "@slack/bolt";
 import { handleNewMessage } from "../pi/slackIntegration";
+import {
+    isStopCommand,
+    isThreadStopped,
+    markThreadStopped,
+    mentionsBot,
+    shouldIgnoreMessage,
+} from "./rfc";
+import { stopThread } from "../pi/pi";
 /**
  * This sample Slack application uses Socket Mode.
  * For the companion getting started setup guide, see:
@@ -25,13 +33,13 @@ app.message(async ({ message, context, body }) => {
     if (slackMessage.bot_id || slackMessage.subtype === "bot_message") return;
     if (!slackMessage.text) return;
     // Avoid double-handling: app_mention below already covers messages that ping the bot
-    if (
-        context.botUserId &&
-        slackMessage.text.includes(`<@${context.botUserId}>`)
-    )
-        return;
+    if (mentionsBot(slackMessage.text, context.botUserId)) return;
+    // RFC I: hidden "## " messages, group pings and "<>" messages without a direct mention
+    if (shouldIgnoreMessage(slackMessage.text, false)) return;
 
     const threadTs = getThreadTs(slackMessage);
+    if (await isThreadStopped(threadTs)) return;
+
     await handleNewMessage(threadTs, slackMessage.text, app, {
         channel: slackMessage.channel,
         recipientTeamId:
@@ -49,11 +57,25 @@ app.event("app_mention", async ({ event, context, body }) => {
     if (mentionEvent.bot_id || mentionEvent.subtype === "bot_message") return;
     if (!mentionEvent.text) return;
 
+    const threadTs = getThreadTs(mentionEvent);
+    const directlyMentioned = mentionsBot(mentionEvent.text, context.botUserId);
+
+    // RFC I: "@botname !stop" halts the thread immediately, even mid-run.
+    if (isStopCommand(mentionEvent.text, context.botUserId)) {
+        await markThreadStopped(threadTs);
+        await stopThread(threadTs);
+        return;
+    }
+
+    if (await isThreadStopped(threadTs)) return;
+    // RFC I: never reply to hidden "## " messages, and treat a group ping as
+    // not addressed to the bot even though Slack delivered the event.
+    if (shouldIgnoreMessage(mentionEvent.text, directlyMentioned)) return;
+
     // Strip the leading "<@BOTID>" mention from the text
     const text = mentionEvent.text.replace(/^<@[^>]+>\s*/, "").trim();
     if (!text) return;
 
-    const threadTs = getThreadTs(mentionEvent);
     await handleNewMessage(threadTs, text, app, {
         channel: mentionEvent.channel,
         recipientTeamId:

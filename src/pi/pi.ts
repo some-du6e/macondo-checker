@@ -277,6 +277,31 @@ export async function getSession(threadTs: string) {
     return sessionPromise;
 }
 
+/**
+ * Abort whatever the thread's agent is doing and tear the session down.
+ * Used by the RFC I "@botname !stop" rule, so it must not throw on a thread
+ * that has no live session.
+ */
+export async function stopThread(threadTs: string) {
+    const cachedSession = sessions.get(threadTs);
+    if (!cachedSession) return;
+
+    sessions.delete(threadTs);
+    clearThreadSessionIdleTimer(cachedSession);
+
+    try {
+        const { session } = await cachedSession.promise;
+        await session.abort();
+        await session.extensionRunner.emit({
+            type: "session_shutdown",
+            reason: "quit",
+        });
+        session.dispose();
+    } catch {
+        // A thread whose session never started is already stopped.
+    }
+}
+
 function clearThreadSessionIdleTimer(cachedSession: CachedThreadSession) {
     if (!cachedSession.idleTimer) return;
     clearTimeout(cachedSession.idleTimer);

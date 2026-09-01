@@ -6,6 +6,7 @@ import type {
     AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 import { subagent } from "../slack/subagents";
+import { isHiddenMessage, isThreadStopped } from "../slack/rfc";
 
 const SLACK_CHANNEL_ID = process.env.SLACK_CHANNEL_ID || "C0BDBR2MEPM";
 const SLACK_TASK_TEXT_LIMIT = 256;
@@ -258,7 +259,8 @@ async function streamPromptToSlack(
         if (completedTaskIds.has(chunk.id)) return;
         // A task that already scrolled off must not steal a slot back from a
         // live one just to report that it finished.
-        if (evictedTaskIds.has(chunk.id) && !slotsByTaskId.has(chunk.id)) return;
+        if (evictedTaskIds.has(chunk.id) && !slotsByTaskId.has(chunk.id))
+            return;
 
         const slot = acquireTaskSlot(chunk.id);
         const isDone = chunk.status === "complete" || chunk.status === "error";
@@ -464,7 +466,10 @@ export async function handleNewMessage(
     app: App,
     target: SlackReplyTarget = {},
 ) {
-    if (message.trim().startsWith("##")) return; // ignore it like the gork(ie) bots
+    // RFC I: "## " messages are invisible to the agent (the Slack handlers also
+    // filter these; this is the backstop for any other caller).
+    if (isHiddenMessage(message)) return;
+    if (await isThreadStopped(threadTs)) return;
 
     const { session, agent, isNewThread } = await getSession(threadTs);
     if (isNewThread)
@@ -493,6 +498,9 @@ export async function handleNewMessage(
 
         const text = getTextContent(piMessage);
         if (!text) return;
+
+        // The thread may have been stopped while the run was in flight.
+        if (await isThreadStopped(threadTs)) return;
 
         if (!streamed)
             await sendMdMessageInThread(threadTs, text, app, target, agent);

@@ -90,6 +90,11 @@ function sq(s: string): string {
     return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
+function normalizeE2bPath(path: string): string {
+    const posixPath = path.replace(/\\/g, "/");
+    return nodePath.posix.normalize(posixPath.replace(/^[a-zA-Z]:(?=\/)/, ""));
+}
+
 // e2b's files.write types its binary input as `ArrayBuffer | Blob | …`, but a Node
 // Buffer is `Uint8Array<ArrayBufferLike>` (its backing store may be a SharedArrayBuffer),
 // which is not assignable to those types under strict mode. Copy into a fresh
@@ -108,22 +113,25 @@ function createE2bReadOps(getSandbox: () => Sandbox): ReadOperations {
     return {
         readFile: async (p: string) => {
             const sbx = getSandbox();
-            const bytes = await sbx.files.read(p, { format: "bytes" });
+            const remotePath = normalizeE2bPath(p);
+            const bytes = await sbx.files.read(remotePath, { format: "bytes" });
             return Buffer.from(bytes);
         },
         access: async (p: string) => {
             const sbx = getSandbox();
-            const ok = await sbx.files.exists(p);
+            const remotePath = normalizeE2bPath(p);
+            const ok = await sbx.files.exists(remotePath);
             if (!ok)
                 throw new Error(
-                    `ENOENT: no such file or directory, access '${p}'`,
+                    `ENOENT: no such file or directory, access '${remotePath}'`,
                 );
         },
         detectImageMimeType: async (p: string) => {
             try {
                 const sbx = getSandbox();
+                const remotePath = normalizeE2bPath(p);
                 const r = await sbx.commands.run(
-                    `file --mime-type -b ${sq(p)}`,
+                    `file --mime-type -b ${sq(remotePath)}`,
                     { timeoutMs: 10_000 },
                 );
                 const m = r.stdout.trim();
@@ -150,15 +158,16 @@ function createE2bWriteOps(getSandbox: () => Sandbox): WriteOperations {
     return {
         writeFile: async (p: string, content: string | Buffer) => {
             const sbx = getSandbox();
+            const remotePath = normalizeE2bPath(p);
             if (Buffer.isBuffer(content)) {
-                await sbx.files.write(p, bufferToArrayBuffer(content));
+                await sbx.files.write(remotePath, bufferToArrayBuffer(content));
             } else {
-                await sbx.files.write(p, content);
+                await sbx.files.write(remotePath, content);
             }
         },
         mkdir: async (dir: string) => {
             const sbx = getSandbox();
-            await sbx.files.makeDir(dir);
+            await sbx.files.makeDir(normalizeE2bPath(dir));
         },
     };
 }
@@ -173,7 +182,7 @@ function createE2bBashOps(getSandbox: () => Sandbox): BashOperations {
     return {
         exec: async (command, cwd, { onData, signal, timeout }) => {
             const sbx = getSandbox();
-            const cmd = `cd ${sq(cwd)} && ${command}`;
+            const cmd = `cd ${sq(normalizeE2bPath(cwd))} && ${command}`;
             const timeoutMs =
                 timeout && timeout > 0 ? timeout * 1000 : CMD_TIMEOUT_MS;
 
@@ -234,17 +243,18 @@ function createE2bLsOps(getSandbox: () => Sandbox): LsOperations {
     return {
         exists: async (p: string) => {
             const sbx = getSandbox();
-            return sbx.files.exists(p);
+            return sbx.files.exists(normalizeE2bPath(p));
         },
         stat: async (p: string) => {
             const sbx = getSandbox();
-            const exists = await sbx.files.exists(p);
+            const remotePath = normalizeE2bPath(p);
+            const exists = await sbx.files.exists(remotePath);
             if (!exists)
                 throw new Error(
-                    `ENOENT: no such file or directory, stat '${p}'`,
+                    `ENOENT: no such file or directory, stat '${remotePath}'`,
                 );
             const r = await sbx.commands.run(
-                `test -d ${sq(p)} && echo dir || echo file`,
+                `test -d ${sq(remotePath)} && echo dir || echo file`,
                 { timeoutMs: 10_000 },
             );
             const isDir = r.stdout.trim() === "dir";
@@ -252,7 +262,7 @@ function createE2bLsOps(getSandbox: () => Sandbox): LsOperations {
         },
         readdir: async (p: string) => {
             const sbx = getSandbox();
-            const entries = await sbx.files.list(p);
+            const entries = await sbx.files.list(normalizeE2bPath(p));
             return entries.map((e: any) => e.name);
         },
     };
@@ -262,7 +272,7 @@ function createE2bFindOps(getSandbox: () => Sandbox): FindOperations {
     return {
         exists: async (p: string) => {
             const sbx = getSandbox();
-            return sbx.files.exists(p);
+            return sbx.files.exists(normalizeE2bPath(p));
         },
         glob: async (
             pattern: string,
@@ -270,6 +280,7 @@ function createE2bFindOps(getSandbox: () => Sandbox): FindOperations {
             opts: { ignore: string[]; limit: number },
         ) => {
             const sbx = getSandbox();
+            const remoteCwd = normalizeE2bPath(cwd);
             const ignoreJson = JSON.stringify(opts.ignore || []);
             // Use Python's glob for reliable recursive glob expansion
             const script = [
@@ -283,7 +294,7 @@ function createE2bFindOps(getSandbox: () => Sandbox): FindOperations {
                 "  if not skip: print(os.path.join(sys.argv[1],r)); c+=1",
             ].join("\n");
             const result = await sbx.commands.run(
-                `python3 -c ${sq(script)} ${sq(cwd)} ${sq(pattern)} ${opts.limit} ${sq(ignoreJson)}`,
+                `python3 -c ${sq(script)} ${sq(remoteCwd)} ${sq(pattern)} ${opts.limit} ${sq(ignoreJson)}`,
                 { timeoutMs: 30_000 },
             );
             return result.stdout.trim().split("\n").filter(Boolean);

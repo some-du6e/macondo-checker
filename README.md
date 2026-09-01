@@ -1,29 +1,42 @@
 # macondo-checker
 
-[Privacy Policy](./PRIVACY.md)
+
 
 ## running
 
-To install dependencies:
+
+
+
+install deps:
 
 ```bash
 bun install
 ```
 
-To run:
+fill out the .env:
+
+```env
+SLACK_BOT_TOKEN=
+SLACK_APP_TOKEN=
+SLACK_CHANNEL_ID=
+
+PI_MODEL_API= # set this to either custom or openrouter
+PI_MODEL_BASE_URL= # base url ending in v1 
+PI_MODEL= # set this to ur model
+PI_MODEL_KEY= # ur api key 
+
+E2B_API_KEY= # e2b key 
+EXA_API_KEY= # exa key
+```
+
+running:
 
 ```bash
 bun run index.ts
 ```
 
-Set `EXA_API_KEY` to let reviews verify public demo listings that block normal
-HTTP clients with Cloudflare or other bot protection.
+running in dev mode:
 
-## possible stack
-
-- pi
-    - for the agent cuz i dont want to write an entire agent thing and also its light asl
-      -n https://pi.dev/docs/latest/json
-- e2b
-    - for making the agent check the projetc inside without fucking up my machine
-    - maybe use this https://pi.dev/packages/pi-extension-e2b
+```bash
+bun run start
+```

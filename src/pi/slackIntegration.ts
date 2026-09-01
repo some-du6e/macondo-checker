@@ -184,8 +184,42 @@ async function streamPromptToSlack(
     let turnIndex = 0;
     const thinkingBuffers = new Map<string, string>();
     const thinkingTaskIds = new Map<string, string>();
-    const trackedTaskIds = new Set<string>();
+    // Slack caps how many tasks a stream can show, so the slots are recycled:
+    // the oldest task (a finished one when there is one) gives up its slot to
+    // whatever comes in next, which scrolls the list instead of dropping tasks.
+    const taskSlots: { slotId: string; taskId: string; done: boolean }[] = [];
+    const slotsByTaskId = new Map<string, (typeof taskSlots)[number]>();
+    const evictedTaskIds = new Set<string>();
     const completedTaskIds = new Set<string>();
+
+    const acquireTaskSlot = (taskId: string) => {
+        const existing = slotsByTaskId.get(taskId);
+        if (existing) return existing;
+
+        if (taskSlots.length < SLACK_TASK_LIMIT) {
+            const slot = {
+                slotId: `task-slot-${taskSlots.length}`,
+                taskId,
+                done: false,
+            };
+            taskSlots.push(slot);
+            slotsByTaskId.set(taskId, slot);
+            return slot;
+        }
+
+        const finishedIndex = taskSlots.findIndex((slot) => slot.done);
+        const slot = taskSlots.splice(
+            finishedIndex === -1 ? 0 : finishedIndex,
+            1,
+        )[0]!;
+        slotsByTaskId.delete(slot.taskId);
+        evictedTaskIds.add(slot.taskId);
+        slot.taskId = taskId;
+        slot.done = false;
+        taskSlots.push(slot);
+        slotsByTaskId.set(taskId, slot);
+        return slot;
+    };
     let claimedInitialThinkingTask = false;
     let resolvedInitialThinkingTask = false;
 
@@ -221,18 +255,23 @@ async function streamPromptToSlack(
     };
 
     const appendTaskUpdate = (chunk: SlackTaskUpdateChunk) => {
-        if (!trackedTaskIds.has(chunk.id)) {
-            if (trackedTaskIds.size >= SLACK_TASK_LIMIT) return;
-            trackedTaskIds.add(chunk.id);
-        }
         if (completedTaskIds.has(chunk.id)) return;
-        if (chunk.status === "complete" || chunk.status === "error")
+        // A task that already scrolled off must not steal a slot back from a
+        // live one just to report that it finished.
+        if (evictedTaskIds.has(chunk.id) && !slotsByTaskId.has(chunk.id)) return;
+
+        const slot = acquireTaskSlot(chunk.id);
+        const isDone = chunk.status === "complete" || chunk.status === "error";
+        if (isDone) {
             completedTaskIds.add(chunk.id);
+            slot.done = true;
+        }
 
         appendToStream({
             chunks: [
                 {
                     ...chunk,
+                    id: slot.slotId,
                     title: truncateTaskText(chunk.title),
                     details: chunk.details
                         ? truncateTaskText(chunk.details)

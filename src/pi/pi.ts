@@ -196,6 +196,8 @@ async function getResourceLoader(agentName: string) {
         "Before a project has a pending or active ship, its reviewable hours are not public. Do not report zero public hours, enforce a minimum-hour requirement, infer hours from journals or Open Graph data, or use unavailable hours to change the verdict. Evaluate hours only when reviewing an existing ship whose hour data is available.",
         "Inspect linked repositories and their history when reviewing. Clone, inspect, install, or run untrusted submission code only inside the E2B sandbox.",
         "For demo URLs, perform only a quick HTTP reachability/status check such as detecting a 404. Do not functionally test or interact with the demo.",
+        "If a demo URL returns a bot-protection response such as 403, 429, CAPTCHA, or a Cloudflare challenge, use verify_demo_with_exa with the exact URL. Do not treat bot protection by itself as evidence that the demo or publishing-platform listing is unavailable.",
+        "An exact Exa result can verify that a public listing exists, but it does not prove the demo works. A missing Exa result is also not proof that the listing is unpublished.",
         "Use Accepted, Needs Changes, or Rejected when recommending a verdict. Reviews are advisory, not official Macondo decisions.",
         "Recommend Rejected only for evidenced non-fixable disqualifiers such as prohibited duplicates, fraud, plagiarism, school assignments, or paid Hack Club work. Never make those accusations from weak signals.",
         "If hours, commit history, originality, or another integrity signal looks suspicious, ask the user for an honest explanation before reaching a conclusion. If the concern remains unresolved and affects the verdict, request a specific human check.",
@@ -223,6 +225,7 @@ async function getResourceLoader(agentName: string) {
         agentDir: getAgentDir(),
         additionalExtensionPaths: [
             "src/e2b/extension.ts",
+            "src/exa/extension.ts",
             "src/macondo/extension.ts",
         ],
         agentsFilesOverride: () => ({ agentsFiles: [] }),

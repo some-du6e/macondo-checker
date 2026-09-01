@@ -52,6 +52,9 @@ The Bot also uses:
 - [E2B](https://e2b.dev/privacy) to run inspection tools in an isolated
   cloud sandbox. Public repositories and related review artifacts may be
   copied into that sandbox.
+- [Exa](https://exa.ai/legal/privacy) to look up public demo and publishing
+  platform URLs when their sites block the Bot's normal HTTP checks. The public
+  URL and a short verification query are sent to Exa.
 - The public Macondo API and public project, repository, and demo services that
   are relevant to your request.
 

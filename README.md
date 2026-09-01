@@ -16,6 +16,9 @@ To run:
 bun run index.ts
 ```
 
+Set `EXA_API_KEY` to let reviews verify public demo listings that block normal
+HTTP clients with Cloudflare or other bot protection.
+
 ## possible stack
 
 - pi
